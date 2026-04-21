@@ -38,6 +38,11 @@ TILT_DIRECTION = 1
 # Motor speed when tracking (0-100)
 MOTOR_SPEED = 100
 
+# Tilt proportional control — |dy| px * TILT_KP = speed, clamped
+TILT_KP        = 0.35
+TILT_MIN_SPEED = 15
+TILT_MAX_SPEED = 60
+
 # Deadzone — within this many px on both axes = locked, shoot
 DEADZONE_PX = 25
 
@@ -284,10 +289,12 @@ def turret_loop():
                     elif pan_running:
                         pan.stop(); pan_running = False; pan_last_spd = 0
 
-                    # Tilt — continuous start/stop like pan
+                    # Tilt — proportional speed to prevent overshoot/oscillation
                     if abs(dy) > DEADZONE_PX:
-                        spd = TILT_DIRECTION * (-1 if dy > 0 else 1) * MOTOR_SPEED
-                        if spd != tilt_last_spd:
+                        mag = int(max(TILT_MIN_SPEED, min(TILT_MAX_SPEED, abs(dy) * TILT_KP)))
+                        sign = -1 if dy > 0 else 1
+                        spd = TILT_DIRECTION * sign * mag
+                        if abs(spd - tilt_last_spd) >= 5 or (spd > 0) != (tilt_last_spd > 0):
                             tilt.start(speed=spd)
                             tilt_last_spd = spd
                         tilt_running = True
