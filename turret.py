@@ -33,7 +33,7 @@ TILT_PORT  = "A"
 SHOOT_PORT = "D"
 
 PAN_DIRECTION  = -1   # flip to -1 if reversed
-TILT_DIRECTION = -1
+TILT_DIRECTION = 1
 
 # Motor speed when tracking (0-100)
 MOTOR_SPEED = 100
