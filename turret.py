@@ -40,9 +40,9 @@ TILT_DIRECTION = -1
 MOTOR_SPEED = 100
 
 # Pan proportional control
-PAN_KP        = 0.10
-PAN_MIN_SPEED = 5
-PAN_MAX_SPEED = 15
+PAN_KP        = 0.25
+PAN_MIN_SPEED = 20
+PAN_MAX_SPEED = 40
 
 # Tilt proportional control — |dy| px * TILT_KP = speed, clamped
 TILT_KP        = 0.10
@@ -53,10 +53,10 @@ TILT_MAX_SPEED = 15
 DEADZONE_PX = 120
 
 # Step mode â short pulse then pause for next frame
-STEP_DURATION = 0.03
+STEP_DURATION = 0.05
 
 SHOOT_COOLDOWN = 2.0
-SHOOT_DURATION = 0.3
+SHOOT_DURATION = 5.0
 
 CONFIDENCE           = 0.45
 GRAVITY_OFFSET       = 0.0
