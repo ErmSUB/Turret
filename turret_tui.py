@@ -29,17 +29,25 @@ PAN_PORT_2 = "C"
 TILT_PORT  = "A"
 SHOOT_PORT = "D"
 
-PAN_DIRECTION  = -1
+PAN_DIRECTION  = 1
 TILT_DIRECTION = -1
 
 MOTOR_SPEED = 100
 
-# Tilt proportional control — |dy| px * TILT_KP = speed, clamped
-TILT_KP        = 0.35
-TILT_MIN_SPEED = 15
-TILT_MAX_SPEED = 60
+# Pan proportional control
+PAN_KP        = 0.10
+PAN_MIN_SPEED = 5
+PAN_MAX_SPEED = 15
 
-DEADZONE_PX = 25
+# Tilt proportional control — |dy| px * TILT_KP = speed, clamped
+TILT_KP        = 0.10
+TILT_MIN_SPEED = 5
+TILT_MAX_SPEED = 15
+
+DEADZONE_PX = 120
+
+# Step mode â short pulse then pause for next frame
+STEP_DURATION = 0.03
 
 SHOOT_COOLDOWN = 2.0
 SHOOT_DURATION = 0.3
@@ -203,7 +211,7 @@ def main():
     tracked = None
     lost_frames   = 0
     LOST_LIMIT    = 10
-    TRACK_ALPHA   = 0.4
+    TRACK_ALPHA   = 0.8
     MATCH_DIST    = 120
 
     target_visible = False
@@ -212,10 +220,6 @@ def main():
     fps_ema        = 0.0
     frame_num      = 0
 
-    pan_running   = False
-    tilt_running  = False
-    pan_last_spd  = 0
-    tilt_last_spd = 0
 
     try:
         while True:
@@ -283,11 +287,7 @@ def main():
                 locked = abs(dx) <= DEADZONE_PX and abs(dy) <= DEADZONE_PX
 
                 if locked:
-                    if pan_running:
-                        pan1.stop(); pan2.stop()
-                        pan_running = False; pan_last_spd = 0
-                    if tilt_running:
-                        tilt.stop(); tilt_running = False; tilt_last_spd = 0
+                    pan1.stop(); pan2.stop(); tilt.stop()
 
                     if now - last_shoot_t >= SHOOT_COOLDOWN:
                         print(f"[LOCKED] FIRING  err=({dx:+d},{dy:+d})")
@@ -296,28 +296,22 @@ def main():
                         shoot.stop()
                         last_shoot_t = now
                 else:
+                    # Pan — pulse step
                     if abs(dx) > DEADZONE_PX:
-                        spd = PAN_DIRECTION * (1 if dx > 0 else -1) * MOTOR_SPEED
-                        if spd != pan_last_spd:
-                            pan1.start(speed=spd)
-                            pan2.start(speed=spd)
-                            pan_last_spd = spd
-                        pan_running = True
-                    elif pan_running:
-                        pan1.stop(); pan2.stop()
-                        pan_running = False; pan_last_spd = 0
+                        mag = int(max(PAN_MIN_SPEED, min(PAN_MAX_SPEED, abs(dx) * PAN_KP)))
+                        spd = PAN_DIRECTION * (1 if dx > 0 else -1) * mag
+                        pan1.start(speed=spd)
+                        pan2.start(speed=spd)
 
-                    # Tilt — proportional speed to prevent overshoot/oscillation
+                    # Tilt — pulse step
                     if abs(dy) > DEADZONE_PX:
                         mag = int(max(TILT_MIN_SPEED, min(TILT_MAX_SPEED, abs(dy) * TILT_KP)))
                         sign = -1 if dy > 0 else 1
                         spd = TILT_DIRECTION * sign * mag
-                        if abs(spd - tilt_last_spd) >= 5 or (spd > 0) != (tilt_last_spd > 0):
-                            tilt.start(speed=spd)
-                            tilt_last_spd = spd
-                        tilt_running = True
-                    elif tilt_running:
-                        tilt.stop(); tilt_running = False; tilt_last_spd = 0
+                        tilt.start(speed=spd)
+
+                    time.sleep(STEP_DURATION)
+                    pan1.stop(); pan2.stop(); tilt.stop()
 
                     pd = "R" if dx>0 else "L"
                     td = "D" if dy>0 else "U"
@@ -326,11 +320,7 @@ def main():
                 if target_visible:
                     print("[LOST]")
                     target_visible = False
-                if pan_running:
-                    pan1.stop(); pan2.stop()
-                    pan_running = False; pan_last_spd = 0
-                if tilt_running:
-                    tilt.stop(); tilt_running = False; tilt_last_spd = 0
+                pan1.stop(); pan2.stop(); tilt.stop()
                 if frame_num % 30 == 0:
                     print(f"[SCAN]  FPS={fps_ema:.1f}")
 
