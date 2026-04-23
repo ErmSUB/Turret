@@ -44,7 +44,7 @@ TILT_KP        = 0.9
 TILT_MIN_SPEED = 5
 TILT_MAX_SPEED = 15
 
-DEADZONE_PX = 60
+DEADZONE_PX = 30
 
 # Step mode â short pulse then pause for next frame
 STEP_DURATION = 0.05
