@@ -35,7 +35,7 @@ TILT_DIRECTION = -1
 MOTOR_SPEED = 100
 
 # Pan proportional control
-PAN_KP        = 0.5
+PAN_KP        = 2
 PAN_MIN_SPEED = 20
 PAN_MAX_SPEED = 40
 
