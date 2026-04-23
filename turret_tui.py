@@ -216,6 +216,8 @@ def main():
 
     target_visible = False
     last_shoot_t   = 0.0
+    shooting       = False
+    shoot_end_t    = 0.0
     prev_t         = time.time()
     fps_ema        = 0.0
     frame_num      = 0
@@ -242,6 +244,11 @@ def main():
             now = time.time()
             fps_ema = 0.1*(1.0/max(now-prev_t,1e-6)) + 0.9*fps_ema
             prev_t  = now
+
+            # End firing without blocking frame processing.
+            if shooting and now >= shoot_end_t:
+                shoot.stop()
+                shooting = False
 
             # Track
             best = None
@@ -289,9 +296,11 @@ def main():
                 if locked:
                     pan1.stop(); pan2.stop(); tilt.stop()
 
-                    if now - last_shoot_t >= SHOOT_COOLDOWN:
+                    if not shooting and now - last_shoot_t >= SHOOT_COOLDOWN:
                         print(f"[LOCKED] FIRING  err=({dx:+d},{dy:+d})")
-                        shoot.run_for_rotations(1)
+                        shoot.start(speed=100)
+                        shoot_end_t = now + SHOOT_DURATION
+                        shooting = True
                         last_shoot_t = now
                 else:
                     # Pan — pulse step
