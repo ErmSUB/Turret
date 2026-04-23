@@ -1,11 +1,10 @@
 """
-turret.py — USB webcam + YOLO + motors + live annotated stream.
+turret_tui.py — USB webcam + YOLO + motors + framebuffer display.
 
-Run on the Pi:
-  python3 turret.py
+Run on the Pi TTY (no X needed):
+  python3 turret_tui.py
 
-Then open in browser on your laptop:
-  http://10.47.206.127:5001/
+Ctrl+C to quit.
 
 Ports:
     A = Tilt   B = Pan (motor 1)   C = Pan (motor 2)   D = Action
@@ -15,12 +14,9 @@ import glob
 import os
 import sys
 import time
-import threading
-from typing import Optional
 
 import cv2
 import numpy as np
-from flask import Flask, Response
 from ultralytics import YOLO
 from buildhat import Motor
 
@@ -33,64 +29,81 @@ PAN_PORT_2 = "C"
 TILT_PORT  = "A"
 SHOOT_PORT = "D"
 
-PAN_DIRECTION  = 1   # flip to -1 if reversed
+PAN_DIRECTION  = 1
 TILT_DIRECTION = -1
 
-# Motor speed when tracking (0-100)
 MOTOR_SPEED = 100
 
 # Pan proportional control
-PAN_KP        = 0.25
+PAN_KP        = 0.9
 PAN_MIN_SPEED = 20
 PAN_MAX_SPEED = 40
 
 # Tilt proportional control — |dy| px * TILT_KP = speed, clamped
-TILT_KP        = 0.10
+TILT_KP        = 0.9
 TILT_MIN_SPEED = 5
 TILT_MAX_SPEED = 15
 
-# Deadzone — within this many px on both axes = aligned, activate
-DEADZONE_PX = 120
+DEADZONE_PX = 60
 
 # Step mode â short pulse then pause for next frame
 STEP_DURATION = 0.05
 
 SHOOT_COOLDOWN = 2.0
-SHOOT_DURATION = 5.0
+SHOOT_ROTATIONS = 1
 
 CONFIDENCE           = 0.45
 GRAVITY_OFFSET       = 0.0
 
-OUTPUT_PORT = 5001
-
+# ==============================================================================
+# Framebuffer
 # ==============================================================================
 
-# Shared annotated frame for the stream
-_frame_lock   = threading.Lock()
-_latest_jpeg  = None
+FB_DEV = "/dev/fb0"
 
-app = Flask(__name__)
+def fb_init():
+    w = int(open("/sys/class/graphics/fb0/virtual_size").read().split(",")[0])
+    h = int(open("/sys/class/graphics/fb0/virtual_size").read().split(",")[1])
+    bpp = int(open("/sys/class/graphics/fb0/bits_per_pixel").read().strip())
+    stride = int(open("/sys/class/graphics/fb0/stride").read().strip())
+    fb = open(FB_DEV, "wb")
+    return fb, w, h, bpp, stride
 
-@app.route("/video")
-def video():
-    def gen():
-        while True:
-            with _frame_lock:
-                j = _latest_jpeg
-            if j is None:
-                time.sleep(0.01)
-                continue
-            yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + j + b"\r\n"
-    return Response(gen(), mimetype="multipart/x-mixed-replace; boundary=frame")
+def fb_write(fb, frame, fb_w, fb_h, stride):
+    fh, fw = frame.shape[:2]
+    # Scale frame to fit screen, centered
+    scale = min(fb_w / fw, fb_h / fh)
+    nw = int(fw * scale)
+    nh = int(fh * scale)
+    resized = cv2.resize(frame, (nw, nh))
 
-@app.route("/")
-def index():
-    return (
-        "<html><body style='margin:0;background:#000'>"
-        "<img src='/video' style='width:100%;height:100vh;object-fit:contain'>"
-        "</body></html>"
-    )
+    # Create black canvas at screen size
+    canvas = np.zeros((fb_h, fb_w, 3), dtype=np.uint8)
+    y_off = (fb_h - nh) // 2
+    x_off = (fb_w - nw) // 2
+    canvas[y_off:y_off+nh, x_off:x_off+nw] = resized
 
+    # BGR -> RGB565: RRRRRGGG GGGBBBBB
+    b = canvas[:, :, 0].astype(np.uint16)
+    g = canvas[:, :, 1].astype(np.uint16)
+    r = canvas[:, :, 2].astype(np.uint16)
+    rgb565 = ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3)
+
+    # Pad rows to match stride if needed
+    bytes_per_px = 2
+    row_bytes = fb_w * bytes_per_px
+    if stride > row_bytes:
+        pad = stride - row_bytes
+        raw = rgb565.astype("<u2").tobytes()
+        padded = b""
+        for y in range(fb_h):
+            padded += raw[y * row_bytes:(y + 1) * row_bytes] + b"\x00" * pad
+        fb.seek(0)
+        fb.write(padded)
+    else:
+        fb.seek(0)
+        fb.write(rgb565.astype("<u2").tobytes())
+    fb.flush()
 
 # ==============================================================================
 # Drawing
@@ -135,7 +148,7 @@ def draw(frame, detections, primary, tx, ty, fps, locked):
     if not detections:
         status, col = "SCANNING...", (0,220,220)
     elif locked:
-        status, col = "** ALIGNED - ACTIVATE **", (0,0,220)
+        status, col = "** ALIGNED - ACTIVATING **", (0,0,220)
     else:
         status, col = "ACQUIRING", (255,255,255)
 
@@ -143,14 +156,14 @@ def draw(frame, detections, primary, tx, ty, fps, locked):
     text(frame, status, ((w-sw)//2, h-14), 0.75, col, 2)
 
     if locked:
-        shoot_s = "ACTIVATE"
+        shoot_s = "READY"
         scale = 2.2
         (lw,lh),_ = cv2.getTextSize(shoot_s, FONT, scale, 4)
         text(frame, shoot_s, ((w-lw)//2, h//2+lh//2), scale, (0,0,220), 4)
 
 
 # ==============================================================================
-# Main loop
+# Main
 # ==============================================================================
 
 def find_usb_camera():
@@ -163,8 +176,21 @@ def find_usb_camera():
     return 0
 
 
-def turret_loop():
-    global _latest_jpeg
+def wait_for_frame_update(cap, previous_frame, max_checks=5):
+    for _ in range(max_checks):
+        ret, new_frame = cap.read()
+        if not ret or new_frame is None:
+            continue
+        if new_frame.shape != previous_frame.shape or not np.array_equal(new_frame, previous_frame):
+            return True
+    return False
+
+
+def main():
+    # Framebuffer
+    print("[FB] Opening framebuffer...")
+    fb, fb_w, fb_h, bpp, stride = fb_init()
+    print(f"[FB] {fb_w}x{fb_h} @ {bpp}bpp, stride={stride}")
 
     # Motors
     print("[Motors] Initialising...")
@@ -189,7 +215,7 @@ def turret_loop():
     print("[YOLO]  Loading NCNN model...")
     model = YOLO("/home/goon/yolov8n_ncnn_model")
     print("[YOLO]  Ready")
-    print(f"[Stream] http://10.47.206.127:{OUTPUT_PORT}/")
+    print("[Display] Rendering to framebuffer. Ctrl+C to quit.")
 
     # Tracker state
     tracked = None
@@ -204,7 +230,6 @@ def turret_loop():
     fps_ema        = 0.0
     frame_num      = 0
 
-    # Motor state — track current direction to avoid spamming start()
 
     try:
         while True:
@@ -276,10 +301,14 @@ def turret_loop():
 
                     if now - last_shoot_t >= SHOOT_COOLDOWN:
                         print(f"[ALIGNED] ACTIVATING  err=({dx:+d},{dy:+d})")
-                        shoot.start(speed=100)
-                        time.sleep(SHOOT_DURATION)
-                        shoot.stop()
-                        last_shoot_t = now
+                        shoot.run_for_rotations(SHOOT_ROTATIONS)
+                        last_shoot_t = time.time()
+
+                        # After firing, wait for a fresh camera frame before acting again.
+                        if not wait_for_frame_update(cap, frame):
+                            print("[WARN] Camera frame did not update after shot.")
+
+                        continue
                 else:
                     # Pan — pulse step
                     if abs(dx) > DEADZONE_PX:
@@ -309,25 +338,17 @@ def turret_loop():
                 if frame_num % 30 == 0:
                     print(f"[SCAN]  FPS={fps_ema:.1f}")
 
-            # Annotate and push to stream
+            # Draw and blast to framebuffer
             draw(frame, detections, primary, tx, ty, fps_ema, locked if primary else False)
-            _, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
-            with _frame_lock:
-                _latest_jpeg = jpeg.tobytes()
+            fb_write(fb, frame, fb_w, fb_h, stride)
 
     except KeyboardInterrupt:
         pass
     finally:
         cap.release()
         pan1.stop(); pan2.stop(); tilt.stop(); shoot.stop()
-        print("[STOP] Done.")
-
-
-def main():
-    t = threading.Thread(target=turret_loop, daemon=True)
-    t.start()
-    print(f"[Flask] Starting stream on port {OUTPUT_PORT}...")
-    app.run(host="0.0.0.0", port=OUTPUT_PORT, threaded=True)
+        fb.close()
+        print("\n[STOP] Done.")
 
 
 if __name__ == "__main__":
