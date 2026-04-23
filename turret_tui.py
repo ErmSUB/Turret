@@ -35,12 +35,12 @@ TILT_DIRECTION = -1
 MOTOR_SPEED = 100
 
 # Pan proportional control
-PAN_KP        = 2
+PAN_KP        = 0.9
 PAN_MIN_SPEED = 20
 PAN_MAX_SPEED = 40
 
 # Tilt proportional control — |dy| px * TILT_KP = speed, clamped
-TILT_KP        = 0.10
+TILT_KP        = 0.9
 TILT_MIN_SPEED = 5
 TILT_MAX_SPEED = 15
 
