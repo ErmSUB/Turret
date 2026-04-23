@@ -36,13 +36,19 @@ MOTOR_SPEED = 100
 
 # Pan proportional control
 PAN_KP        = 0.9
+PAN_KI        = 0.02
+PAN_KD        = 0.12
 PAN_MIN_SPEED = 20
 PAN_MAX_SPEED = 40
+PAN_I_LIMIT   = 3000.0
 
 # Tilt proportional control — |dy| px * TILT_KP = speed, clamped
 TILT_KP        = 0.9
+TILT_KI        = 0.02
+TILT_KD        = 0.12
 TILT_MIN_SPEED = 5
 TILT_MAX_SPEED = 15
+TILT_I_LIMIT   = 3000.0
 
 DEADZONE_PX = 60
 
@@ -186,6 +192,28 @@ def wait_for_frame_update(cap, previous_frame, max_checks=5):
     return False
 
 
+def clamp(value, lo, hi):
+    return max(lo, min(hi, value))
+
+
+def pid_step(error, dt, state, kp, ki, kd, i_limit):
+    # Integrate with clamping to prevent wind-up when target is off-center for long periods.
+    state['integral'] = clamp(state['integral'] + error * dt, -i_limit, i_limit)
+
+    derivative = 0.0
+    if dt > 0.0:
+        derivative = (error - state['prev_error']) / dt
+
+    output = kp * error + ki * state['integral'] + kd * derivative
+    state['prev_error'] = error
+    return output
+
+
+def reset_pid_state(state):
+    state['integral'] = 0.0
+    state['prev_error'] = 0.0
+
+
 def main():
     # Framebuffer
     print("[FB] Opening framebuffer...")
@@ -230,6 +258,9 @@ def main():
     fps_ema        = 0.0
     frame_num      = 0
 
+    pan_pid_state = {'integral': 0.0, 'prev_error': 0.0}
+    tilt_pid_state = {'integral': 0.0, 'prev_error': 0.0}
+
 
     try:
         while True:
@@ -250,7 +281,8 @@ def main():
 
             frame_num += 1
             now = time.time()
-            fps_ema = 0.1*(1.0/max(now-prev_t,1e-6)) + 0.9*fps_ema
+            dt = max(now - prev_t, 1e-3)
+            fps_ema = 0.1 * (1.0 / dt) + 0.9 * fps_ema
             prev_t  = now
 
             # Track
@@ -298,6 +330,8 @@ def main():
 
                 if locked:
                     pan1.stop(); pan2.stop(); tilt.stop()
+                    reset_pid_state(pan_pid_state)
+                    reset_pid_state(tilt_pid_state)
 
                     if now - last_shoot_t >= SHOOT_COOLDOWN:
                         print(f"[ALIGNED] ACTIVATING  err=({dx:+d},{dy:+d})")
@@ -310,32 +344,41 @@ def main():
 
                         continue
                 else:
-                    # Pan — pulse step
+                    pan_output = 0.0
+                    tilt_output = 0.0
+
+                    # Pan PID — pulse step
                     if abs(dx) > DEADZONE_PX:
-                        mag = int(max(PAN_MIN_SPEED, min(PAN_MAX_SPEED, abs(dx) * PAN_KP)))
-                        spd = PAN_DIRECTION * (1 if dx > 0 else -1) * mag
+                        pan_output = pid_step(dx, dt, pan_pid_state, PAN_KP, PAN_KI, PAN_KD, PAN_I_LIMIT)
+                        mag = int(clamp(abs(pan_output), PAN_MIN_SPEED, PAN_MAX_SPEED))
+                        spd = PAN_DIRECTION * (1 if pan_output > 0 else -1) * mag
                         pan1.start(speed=spd)
                         pan2.start(speed=spd)
+                    else:
+                        reset_pid_state(pan_pid_state)
 
-                    # Tilt — pulse step
+                    # Tilt PID — pulse step
                     if abs(dy) > DEADZONE_PX:
-                        mag = int(max(TILT_MIN_SPEED, min(TILT_MAX_SPEED, abs(dy) * TILT_KP)))
-                        # Keep tilt sign convention the same as pan:
-                        # dy > 0 => one correction direction, dy < 0 => the opposite.
-                        # Use only TILT_DIRECTION to invert hardware polarity.
-                        spd = TILT_DIRECTION * (1 if dy > 0 else -1) * mag
+                        tilt_output = pid_step(dy, dt, tilt_pid_state, TILT_KP, TILT_KI, TILT_KD, TILT_I_LIMIT)
+                        mag = int(clamp(abs(tilt_output), TILT_MIN_SPEED, TILT_MAX_SPEED))
+                        sign = -1 if tilt_output > 0 else 1
+                        spd = TILT_DIRECTION * sign * mag
                         tilt.start(speed=spd)
+                    else:
+                        reset_pid_state(tilt_pid_state)
 
                     time.sleep(STEP_DURATION)
                     pan1.stop(); pan2.stop(); tilt.stop()
 
                     pd = "R" if dx>0 else "L"
                     td = "D" if dy>0 else "U"
-                    print(f"[AIM]  pan={pd} tilt={td}  err=({dx:+4d},{dy:+4d})  t_spd={spd if abs(dy) > DEADZONE_PX else 0:+4d}  {primary['conf']*100:.0f}%")
+                    print(f"[AIM]  pan={pd} tilt={td}  err=({dx:+4d},{dy:+4d})  {primary['conf']*100:.0f}%")
             else:
                 if target_visible:
                     print("[LOST]")
                     target_visible = False
+                reset_pid_state(pan_pid_state)
+                reset_pid_state(tilt_pid_state)
                 pan1.stop(); pan2.stop(); tilt.stop()
                 if frame_num % 30 == 0:
                     print(f"[SCAN]  FPS={fps_ema:.1f}")
