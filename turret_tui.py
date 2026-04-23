@@ -291,9 +291,7 @@ def main():
 
                     if now - last_shoot_t >= SHOOT_COOLDOWN:
                         print(f"[LOCKED] FIRING  err=({dx:+d},{dy:+d})")
-                        shoot.start(speed=100)
-                        time.sleep(SHOOT_DURATION)
-                        shoot.stop()
+                        shoot.run_for_rotations(1)
                         last_shoot_t = now
                 else:
                     # Pan — pulse step
