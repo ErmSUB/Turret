@@ -1,5 +1,5 @@
 """
-Turret auto-aim script for Raspberry Pi 5 + AI Camera + Build HAT (SPIKE motors).
+Friendly auto-track script for Raspberry Pi 5 + AI Camera + Build HAT (SPIKE motors).
 
 How to configure (top of file):
 - MOTOR PORTS: set PAN_MOTOR_PORT / TILT_MOTOR_PORT
@@ -32,7 +32,7 @@ class Config:
 	TILT_MOTOR_PORT: Optional[str] = "B"  # Set to None if you only have pan
 
 	# -------- Turn Tuning (make this obvious + easy to change) --------
-	# Degrees moved for each pixel of target error from center.
+	# Degrees moved for each pixel of person-position error from center.
 	PAN_DEGREES_PER_PIXEL: float = 0.08
 	TILT_DEGREES_PER_PIXEL: float = 0.06
 
@@ -43,11 +43,11 @@ class Config:
 	# Motor speed used for run_for_degrees (0-100)
 	MOTOR_SPEED: int = 40
 
-	# Reverse these if your turret moves the wrong way.
+	# Reverse these if your tracker moves the wrong way.
 	PAN_DIRECTION: int = 1
 	TILT_DIRECTION: int = 1
 
-	# -------- Aiming Behaviour --------
+	# -------- Tracking Behaviour --------
 	DEADZONE_PIXELS: int = 25
 	COMMAND_COOLDOWN_SECONDS: float = 0.12
 
@@ -115,7 +115,7 @@ def find_target_center(frame, face_detector: cv2.CascadeClassifier):
 	if len(faces) == 0:
 		return None
 
-	# Track the largest face as the main target.
+	# Track the largest face as the main focus.
 	x, y, w, h = max(faces, key=lambda r: r[2] * r[3])
 	cx = x + w // 2
 	cy = y + h // 2
@@ -134,7 +134,7 @@ def draw_overlay(frame, frame_center, target_info):
 
 
 def parse_args() -> argparse.Namespace:
-	parser = argparse.ArgumentParser(description="Auto-aim turret with Pi camera + Build HAT")
+	parser = argparse.ArgumentParser(description="Auto-track people with Pi camera + Build HAT")
 	parser.add_argument(
 		"--headless",
 		action="store_true",
@@ -196,7 +196,7 @@ def main() -> None:
 
 			if cfg.SHOW_PREVIEW_WINDOW:
 				draw_overlay(frame, frame_center, target_info)
-				cv2.imshow("Turret Aim", frame)
+				cv2.imshow("Friendly Tracker", frame)
 				key = cv2.waitKey(1) & 0xFF
 				if key in (27, ord("q")):
 					break

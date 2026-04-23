@@ -7,7 +7,7 @@ Run on the Pi TTY (no X needed):
 Ctrl+C to quit.
 
 Ports:
-  A = Tilt   B = Pan (motor 1)   C = Pan (motor 2)   D = Shoot
+    A = Tilt   B = Pan (motor 1)   C = Pan (motor 2)   D = Action
 """
 
 import glob
@@ -131,7 +131,7 @@ def draw(frame, detections, primary, tx, ty, fps, locked):
 
     if primary:
         cv2.rectangle(frame, (primary['x1'],primary['y1']), (primary['x2'],primary['y2']), (0,0,220), 3)
-        text(frame, f"Trainee {primary['conf']*100:.0f}%", (primary['x1'], max(primary['y1']-6,14)), 0.55, (0,0,220), 2)
+        text(frame, f"FOCUS {primary['conf']*100:.0f}%", (primary['x1'], max(primary['y1']-6,14)), 0.55, (0,0,220), 2)
         cx = (primary['x1']+primary['x2'])//2
         cy = primary['y1'] + int((primary['y2']-primary['y1']) * 0.15)
         cv2.circle(frame, (cx, cy), 6, (0,0,220), -1)
@@ -148,7 +148,7 @@ def draw(frame, detections, primary, tx, ty, fps, locked):
     if not detections:
         status, col = "SCANNING...", (0,220,220)
     elif locked:
-        status, col = "** LOCKED - ACTIVATING **", (0,0,220)
+        status, col = "** ALIGNED - ACTIVATING **", (0,0,220)
     else:
         status, col = "ACQUIRING", (255,255,255)
 
@@ -156,7 +156,7 @@ def draw(frame, detections, primary, tx, ty, fps, locked):
     text(frame, status, ((w-sw)//2, h-14), 0.75, col, 2)
 
     if locked:
-        shoot_s = "Activated"
+        shoot_s = "READY"
         scale = 2.2
         (lw,lh),_ = cv2.getTextSize(shoot_s, FONT, scale, 4)
         text(frame, shoot_s, ((w-lw)//2, h//2+lh//2), scale, (0,0,220), 4)
@@ -189,7 +189,7 @@ def main():
     pan2  = Motor(PAN_PORT_2)
     tilt  = Motor(TILT_PORT)
     shoot = Motor(SHOOT_PORT)
-    print(f"[Motors] Pan={PAN_PORT_1}+{PAN_PORT_2}  Tilt={TILT_PORT}  Shoot={SHOOT_PORT}")
+    print(f"[Motors] Pan={PAN_PORT_1}+{PAN_PORT_2}  Tilt={TILT_PORT}  Action={SHOOT_PORT}")
 
     # Camera
     idx = find_usb_camera()
@@ -290,7 +290,7 @@ def main():
                     pan1.stop(); pan2.stop(); tilt.stop()
 
                     if now - last_shoot_t >= SHOOT_COOLDOWN:
-                        print(f"[LOCKED] FIRING  err=({dx:+d},{dy:+d})")
+                        print(f"[ALIGNED] ACTIVATING  err=({dx:+d},{dy:+d})")
                         shoot.run_for_rotations(1)
                         last_shoot_t = now
                 else:

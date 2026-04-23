@@ -1,8 +1,8 @@
 """
-turret_camera_test.py — Raspberry Pi 5 Turret System: Camera & Detection Test
+turret_camera_test.py — Raspberry Pi 5 Friendly Camera & Detection Test
 
-Performs real-time person detection with bounding boxes and simulates turret
-aiming commands as on-screen text overlay. No motor control — visuals only.
+Performs real-time person detection with bounding boxes and simulates
+friendly tracking prompts as on-screen text overlay. No motor control — visuals only.
 
 Supports:
   - Raspberry Pi AI Camera (IMX500) via picamera2 + MobileNet object detection
@@ -33,12 +33,12 @@ Install dependencies:
 # CONFIGURABLE CONSTANTS — tune these for your setup
 # ==============================================================================
 
-# Pixel offset threshold for "aim is close enough" — below this, SHOOT is shown
+# Pixel offset threshold for "tracking is close enough" — below this, READY is shown
 THRESHOLD_PX = 30
 
 # Aim point vertical offset above frame center, as a fraction of frame height.
-# Aim point is offset above center to compensate for projectile drop.
-# Adjust GRAVITY_OFFSET_PERCENT constant based on projectile type and range.
+# Aim point is offset above center to fine-tune where the tracker settles.
+# Adjust GRAVITY_OFFSET_PERCENT based on your setup and viewing distance.
 GRAVITY_OFFSET_PERCENT = 0.05
 
 # Minimum detection confidence to show a bounding box (0.0–1.0)
@@ -369,7 +369,7 @@ def _put_text_outlined(
 
 
 def draw_crosshair(img: np.ndarray, cx: int, cy: int, size: int = 18) -> None:
-    """Draw a red targeting crosshair."""
+    """Draw a red guide crosshair."""
     cv2.line(img, (cx - size, cy), (cx + size, cy), RED, 2, cv2.LINE_AA)
     cv2.line(img, (cx, cy - size), (cx, cy + size), RED, 2, cv2.LINE_AA)
     cv2.circle(img, (cx, cy), size // 2, RED, 1, cv2.LINE_AA)
@@ -397,7 +397,7 @@ def compute_aim(
     target_y: int,
 ) -> tuple[str, str, bool]:
     """
-    Given the primary detection and the aim target point, return
+    Given the primary detection and the aim point, return
     (h_cmd, v_cmd, locked) where locked=True means both axes are within threshold.
     """
     dx = det.cx - target_x  # positive → person is right of target
@@ -406,16 +406,16 @@ def compute_aim(
     if abs(dx) <= THRESHOLD_PX:
         h_cmd = ""
     elif dx > 0:
-        h_cmd = "-> ROTATE RIGHT"
+        h_cmd = "-> MOVE RIGHT"
     else:
-        h_cmd = "<- ROTATE LEFT"
+        h_cmd = "<- MOVE LEFT"
 
     if abs(dy) <= THRESHOLD_PX:
         v_cmd = ""
     elif dy > 0:
-        v_cmd = "v DEPRESS DOWN"
+        v_cmd = "v MOVE DOWN"
     else:
-        v_cmd = "^ ELEVATE UP"
+        v_cmd = "^ MOVE UP"
 
     locked = (h_cmd == "" and v_cmd == "")
     return h_cmd, v_cmd, locked
@@ -427,7 +427,7 @@ def compute_aim(
 
 def main() -> None:
     camera = init_camera()
-    print("[Turret Camera Test] Running — press 'q' to quit.")
+    print("[Friendly Camera Test] Running — press 'q' to quit.")
 
     prev_time = time.time()
     fps_display = 0.0
@@ -509,7 +509,7 @@ def main() -> None:
 
         if primary:
             # Smoothed tracked box in red (primary target)
-            draw_box(frame, primary, RED, f"TARGET  {primary.confidence * 100:.0f}%", _THICK_M + 1)
+            draw_box(frame, primary, RED, f"FOCUS  {primary.confidence * 100:.0f}%", _THICK_M + 1)
             cv2.line(frame, (primary.cx, primary.cy), (target_x, target_y),
                      RED, 1, cv2.LINE_AA)
 
@@ -541,11 +541,11 @@ def main() -> None:
         (tw, _), _ = cv2.getTextSize(count_str, _FONT, _FONT_SMALL, _THICK_S)
         _put_text_outlined(frame, count_str, (frame_w - tw - 12, 24), _FONT_SMALL, WHITE, _THICK_S)
 
-        # Bottom-left: aim commands
+        # Bottom-left: guidance prompts
         aim_parts = [p for p in [h_cmd, v_cmd] if p]
-        aim_str   = "  ".join(aim_parts) if aim_parts else "ON TARGET"
+        aim_str   = "  ".join(aim_parts) if aim_parts else "CENTERED"
         if not primary:
-            aim_str = "NO TARGET"
+            aim_str = "NO PERSON"
         _put_text_outlined(frame, aim_str, (10, frame_h - 40), _FONT_MED, WHITE, _THICK_M)
 
         # Bottom-centre: status banner
@@ -553,10 +553,10 @@ def main() -> None:
             status_str   = "SCANNING..."
             status_color = YELLOW
         elif locked:
-            status_str   = "** TARGET LOCKED - SHOOT **"
+            status_str   = "** PERSON CENTERED - READY **"
             status_color = RED
         else:
-            status_str   = "ACQUIRING TARGET"
+            status_str   = "TRACKING PERSON"
             status_color = WHITE
 
         (sw, sh), _ = cv2.getTextSize(status_str, _FONT, _FONT_MED, _THICK_M)
@@ -564,9 +564,9 @@ def main() -> None:
         status_y = frame_h - 14
         _put_text_outlined(frame, status_str, (status_x, status_y), _FONT_MED, status_color, _THICK_M)
 
-        # Large centred SHOOT indicator when locked
+        # Large centred READY indicator when locked
         if locked and primary:
-            shoot_str = "SHOOT"
+            shoot_str = "READY"
             (lw, lh), _ = cv2.getTextSize(shoot_str, _FONT, _FONT_LARGE * 1.8, _THICK_L + 1)
             shoot_x = (frame_w - lw) // 2
             shoot_y = frame_h // 2 + lh // 2
@@ -574,13 +574,13 @@ def main() -> None:
                                _FONT_LARGE * 1.8, RED, _THICK_L + 1)
 
         # ── Display ───────────────────────────────────────────────────────────
-        cv2.imshow("Turret Camera Test", frame)
+        cv2.imshow("Friendly Camera Test", frame)
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break
 
     camera.release()
     cv2.destroyAllWindows()
-    print("[Turret Camera Test] Exited cleanly.")
+    print("[Friendly Camera Test] Exited cleanly.")
 
 
 if __name__ == "__main__":

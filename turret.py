@@ -8,7 +8,7 @@ Then open in browser on your laptop:
   http://10.47.206.127:5001/
 
 Ports:
-  A = Tilt   B = Pan (motor 1)   C = Pan (motor 2)   D = Shoot
+    A = Tilt   B = Pan (motor 1)   C = Pan (motor 2)   D = Action
 """
 
 import glob
@@ -49,7 +49,7 @@ TILT_KP        = 0.10
 TILT_MIN_SPEED = 5
 TILT_MAX_SPEED = 15
 
-# Deadzone — within this many px on both axes = locked, shoot
+# Deadzone — within this many px on both axes = aligned, activate
 DEADZONE_PX = 120
 
 # Step mode â short pulse then pause for next frame
@@ -118,7 +118,7 @@ def draw(frame, detections, primary, tx, ty, fps, locked):
 
     if primary:
         cv2.rectangle(frame, (primary['x1'],primary['y1']), (primary['x2'],primary['y2']), (0,0,220), 3)
-        text(frame, f"TARGET {primary['conf']*100:.0f}%", (primary['x1'], max(primary['y1']-6,14)), 0.55, (0,0,220), 2)
+        text(frame, f"FOCUS {primary['conf']*100:.0f}%", (primary['x1'], max(primary['y1']-6,14)), 0.55, (0,0,220), 2)
         cx = (primary['x1']+primary['x2'])//2
         cy = primary['y1'] + int((primary['y2']-primary['y1']) * 0.15)
         cv2.circle(frame, (cx, cy), 6, (0,0,220), -1)
@@ -135,7 +135,7 @@ def draw(frame, detections, primary, tx, ty, fps, locked):
     if not detections:
         status, col = "SCANNING...", (0,220,220)
     elif locked:
-        status, col = "** LOCKED - SHOOT **", (0,0,220)
+        status, col = "** ALIGNED - ACTIVATE **", (0,0,220)
     else:
         status, col = "ACQUIRING", (255,255,255)
 
@@ -143,7 +143,7 @@ def draw(frame, detections, primary, tx, ty, fps, locked):
     text(frame, status, ((w-sw)//2, h-14), 0.75, col, 2)
 
     if locked:
-        shoot_s = "SHOOT"
+        shoot_s = "ACTIVATE"
         scale = 2.2
         (lw,lh),_ = cv2.getTextSize(shoot_s, FONT, scale, 4)
         text(frame, shoot_s, ((w-lw)//2, h//2+lh//2), scale, (0,0,220), 4)
@@ -173,7 +173,7 @@ def turret_loop():
     pan2  = Motor(PAN_PORT_2)
     tilt  = Motor(TILT_PORT)
     shoot = Motor(SHOOT_PORT)
-    print(f"[Motors] Pan={PAN_PORT_1}+{PAN_PORT_2}  Tilt={TILT_PORT}  Shoot={SHOOT_PORT}")
+    print(f"[Motors] Pan={PAN_PORT_1}+{PAN_PORT_2}  Tilt={TILT_PORT}  Action={SHOOT_PORT}")
 
     # Camera
     idx = find_usb_camera()
@@ -275,7 +275,7 @@ def turret_loop():
                     pan1.stop(); pan2.stop(); tilt.stop()
 
                     if now - last_shoot_t >= SHOOT_COOLDOWN:
-                        print(f"[LOCKED] FIRING  err=({dx:+d},{dy:+d})")
+                        print(f"[ALIGNED] ACTIVATING  err=({dx:+d},{dy:+d})")
                         shoot.start(speed=100)
                         time.sleep(SHOOT_DURATION)
                         shoot.stop()
