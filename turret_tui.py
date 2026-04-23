@@ -35,7 +35,7 @@ TILT_DIRECTION = -1
 MOTOR_SPEED = 100
 
 # Pan proportional control
-PAN_KP        = 0.25
+PAN_KP        = 0.5
 PAN_MIN_SPEED = 20
 PAN_MAX_SPEED = 40
 
@@ -131,7 +131,7 @@ def draw(frame, detections, primary, tx, ty, fps, locked):
 
     if primary:
         cv2.rectangle(frame, (primary['x1'],primary['y1']), (primary['x2'],primary['y2']), (0,0,220), 3)
-        text(frame, f"TARGET {primary['conf']*100:.0f}%", (primary['x1'], max(primary['y1']-6,14)), 0.55, (0,0,220), 2)
+        text(frame, f"Trainee {primary['conf']*100:.0f}%", (primary['x1'], max(primary['y1']-6,14)), 0.55, (0,0,220), 2)
         cx = (primary['x1']+primary['x2'])//2
         cy = primary['y1'] + int((primary['y2']-primary['y1']) * 0.15)
         cv2.circle(frame, (cx, cy), 6, (0,0,220), -1)
@@ -148,7 +148,7 @@ def draw(frame, detections, primary, tx, ty, fps, locked):
     if not detections:
         status, col = "SCANNING...", (0,220,220)
     elif locked:
-        status, col = "** LOCKED - SHOOT **", (0,0,220)
+        status, col = "** LOCKED - ACTIVATING **", (0,0,220)
     else:
         status, col = "ACQUIRING", (255,255,255)
 
@@ -156,7 +156,7 @@ def draw(frame, detections, primary, tx, ty, fps, locked):
     text(frame, status, ((w-sw)//2, h-14), 0.75, col, 2)
 
     if locked:
-        shoot_s = "SHOOT"
+        shoot_s = "Activated"
         scale = 2.2
         (lw,lh),_ = cv2.getTextSize(shoot_s, FONT, scale, 4)
         text(frame, shoot_s, ((w-lw)//2, h//2+lh//2), scale, (0,0,220), 4)
