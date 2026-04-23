@@ -44,13 +44,13 @@ TILT_KP        = 0.9
 TILT_MIN_SPEED = 5
 TILT_MAX_SPEED = 15
 
-DEADZONE_PX = 120
+DEADZONE_PX = 60
 
 # Step mode â short pulse then pause for next frame
 STEP_DURATION = 0.05
 
 SHOOT_COOLDOWN = 2.0
-SHOOT_DURATION = 5.0
+SHOOT_ROTATIONS = 1
 
 CONFIDENCE           = 0.45
 GRAVITY_OFFSET       = 0.0
@@ -176,6 +176,16 @@ def find_usb_camera():
     return 0
 
 
+def wait_for_frame_update(cap, previous_frame, max_checks=5):
+    for _ in range(max_checks):
+        ret, new_frame = cap.read()
+        if not ret or new_frame is None:
+            continue
+        if new_frame.shape != previous_frame.shape or not np.array_equal(new_frame, previous_frame):
+            return True
+    return False
+
+
 def main():
     # Framebuffer
     print("[FB] Opening framebuffer...")
@@ -216,8 +226,6 @@ def main():
 
     target_visible = False
     last_shoot_t   = 0.0
-    shooting       = False
-    shoot_end_t    = 0.0
     prev_t         = time.time()
     fps_ema        = 0.0
     frame_num      = 0
@@ -244,11 +252,6 @@ def main():
             now = time.time()
             fps_ema = 0.1*(1.0/max(now-prev_t,1e-6)) + 0.9*fps_ema
             prev_t  = now
-
-            # End firing without blocking frame processing.
-            if shooting and now >= shoot_end_t:
-                shoot.stop()
-                shooting = False
 
             # Track
             best = None
@@ -296,12 +299,16 @@ def main():
                 if locked:
                     pan1.stop(); pan2.stop(); tilt.stop()
 
-                    if not shooting and now - last_shoot_t >= SHOOT_COOLDOWN:
+                    if now - last_shoot_t >= SHOOT_COOLDOWN:
                         print(f"[ALIGNED] ACTIVATING  err=({dx:+d},{dy:+d})")
-                        shoot.start(speed=100)
-                        shoot_end_t = now + SHOOT_DURATION
-                        shooting = True
-                        last_shoot_t = now
+                        shoot.run_for_rotations(SHOOT_ROTATIONS)
+                        last_shoot_t = time.time()
+
+                        # After firing, wait for a fresh camera frame before acting again.
+                        if not wait_for_frame_update(cap, frame):
+                            print("[WARN] Camera frame did not update after shot.")
+
+                        continue
                 else:
                     # Pan — pulse step
                     if abs(dx) > DEADZONE_PX:
