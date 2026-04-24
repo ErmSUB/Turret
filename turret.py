@@ -167,6 +167,7 @@ def draw(frame, detections, primary, tx, ty, fps, locked):
 # ==============================================================================
 
 def find_usb_camera():
+    # Prefer a USB camera device; fall back to /dev/video0 if none is identified.
     for path in sorted(glob.glob("/sys/class/video4linux/video*")):
         if "usb" in os.path.realpath(path).lower():
             try:
@@ -177,6 +178,8 @@ def find_usb_camera():
 
 
 def wait_for_frame_update(cap, previous_frame, max_checks=5):
+    # Read a few frames and confirm at least one is different from the prior frame.
+    # This helps avoid acting twice on a stale image after the shooter motor runs.
     for _ in range(max_checks):
         ret, new_frame = cap.read()
         if not ret or new_frame is None:
@@ -217,7 +220,8 @@ def main():
     print("[YOLO]  Ready")
     print("[Display] Rendering to framebuffer. Ctrl+C to quit.")
 
-    # Tracker state
+    # Tracker state.
+    # "tracked" stores a smoothed bounding box to reduce jitter between frames.
     tracked = None
     lost_frames   = 0
     LOST_LIMIT    = 10
@@ -237,10 +241,12 @@ def main():
             if not ret or frame is None:
                 continue
 
+            # Use image center as the desired aim point.
             fh, fw = frame.shape[:2]
             tx = fw // 2
             ty = int(fh // 2 - fh * GRAVITY_OFFSET)
 
+            # Detect only class 0 (person) for speed and simpler targeting.
             results = model(frame, verbose=False, conf=CONFIDENCE, classes=[0], imgsz=320)
             detections = []
             for r in results:
@@ -253,28 +259,33 @@ def main():
             fps_ema = 0.1*(1.0/max(now-prev_t,1e-6)) + 0.9*fps_ema
             prev_t  = now
 
-            # Track
+            # Track: keep lock on the same subject when possible.
             best = None
             if detections:
                 if tracked is None:
+                    # First acquisition: choose the largest person on screen.
                     best = max(detections, key=lambda d:(d['x2']-d['x1'])*(d['y2']-d['y1']))
                 else:
+                    # Reacquisition: pick the detection nearest to last tracked center.
                     tcx = (tracked[0]+tracked[2])/2
                     tcy = (tracked[1]+tracked[3])/2
                     best = min(detections, key=lambda d:((d['x1']+d['x2'])//2-tcx)**2+((d['y1']+d['y2'])//2-tcy)**2)
                     bcx = (best['x1']+best['x2'])//2
                     bcy = (best['y1']+best['y2'])//2
+                    # If target jumps too far, treat it as a new target selection.
                     if ((bcx-tcx)**2+(bcy-tcy)**2)**0.5 > MATCH_DIST:
                         tracked = None
                         best = max(detections, key=lambda d:(d['x2']-d['x1'])*(d['y2']-d['y1']))
                 if tracked is None:
                     tracked = [float(best['x1']),float(best['y1']),float(best['x2']),float(best['y2'])]
                 else:
+                    # Exponential smoothing to damp sudden detector box movement.
                     for i,v in enumerate([best['x1'],best['y1'],best['x2'],best['y2']]):
                         tracked[i] += TRACK_ALPHA*(v-tracked[i])
                 lost_frames = 0
             else:
                 lost_frames += 1
+                # Drop target lock after consecutive misses.
                 if lost_frames >= LOST_LIMIT:
                     tracked = None
 
@@ -284,12 +295,13 @@ def main():
                            'x2':int(tracked[2]),'y2':int(tracked[3]),
                            'conf':best['conf']}
 
-            # Act
+            # Act: convert pixel error into short motor pulses.
             if primary:
                 if not target_visible:
                     print(f"[FOUND]  conf={primary['conf']*100:.0f}%")
                     target_visible = True
 
+                # Aim a little above box center to better match upper-body/head position.
                 cx = (primary['x1']+primary['x2'])//2
                 cy = primary['y1'] + int((primary['y2']-primary['y1']) * 0.15)
                 dx = cx - tx
@@ -297,6 +309,7 @@ def main():
                 locked = abs(dx) <= DEADZONE_PX and abs(dy) <= DEADZONE_PX
 
                 if locked:
+                    # Inside deadzone: stop corrections and trigger action when cooldown passes.
                     pan1.stop(); pan2.stop(); tilt.stop()
 
                     if now - last_shoot_t >= SHOOT_COOLDOWN:
@@ -312,6 +325,7 @@ def main():
                 else:
                     # Pan — pulse step
                     if abs(dx) > DEADZONE_PX:
+                        # Proportional speed: larger error -> faster correction.
                         mag = int(max(PAN_MIN_SPEED, min(PAN_MAX_SPEED, abs(dx) * PAN_KP)))
                         spd = PAN_DIRECTION * (1 if dx > 0 else -1) * mag
                         pan1.start(speed=spd)
@@ -326,6 +340,7 @@ def main():
                         spd = TILT_DIRECTION * (1 if dy > 0 else -1) * mag
                         tilt.start(speed=spd)
 
+                    # Pulse motors briefly, then stop so each frame can re-evaluate direction.
                     time.sleep(STEP_DURATION)
                     pan1.stop(); pan2.stop(); tilt.stop()
 
@@ -333,6 +348,7 @@ def main():
                     td = "D" if dy>0 else "U"
                     print(f"[AIM]  pan={pd} tilt={td}  err=({dx:+4d},{dy:+4d})  t_spd={spd if abs(dy) > DEADZONE_PX else 0:+4d}  {primary['conf']*100:.0f}%")
             else:
+                # No target available: keep motors idle and periodically report scan FPS.
                 if target_visible:
                     print("[LOST]")
                     target_visible = False
