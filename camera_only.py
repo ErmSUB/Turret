@@ -21,6 +21,7 @@ import threading
 import time
 
 import cv2
+from buildhat import Motor
 from flask import Flask, Response
 
 
@@ -29,6 +30,26 @@ _frame_lock = threading.Lock()
 _latest_jpeg: bytes | None = None
 
 app = Flask(__name__)
+
+
+class ManualTurretController:
+    def __init__(self, pan_port_1: str, pan_port_2: str, tilt_port: str, motor_speed: int) -> None:
+        self.pan_1 = Motor(pan_port_1)
+        self.pan_2 = Motor(pan_port_2)
+        self.tilt = Motor(tilt_port)
+        self.motor_speed = motor_speed
+
+    def pan(self, degrees: int) -> None:
+        self.pan_1.run_for_degrees(degrees, speed=self.motor_speed, blocking=False)
+        self.pan_2.run_for_degrees(degrees, speed=self.motor_speed, blocking=False)
+
+    def tilt_move(self, degrees: int) -> None:
+        self.tilt.run_for_degrees(degrees, speed=self.motor_speed, blocking=False)
+
+    def stop(self) -> None:
+        self.pan_1.stop()
+        self.pan_2.stop()
+        self.tilt.stop()
 
 
 def find_usb_camera() -> int:
@@ -95,7 +116,75 @@ def parse_args() -> argparse.Namespace:
         default=480,
         help="Capture height.",
     )
+    parser.add_argument(
+        "--pan-port-1",
+        default="B",
+        help="Build HAT port for first pan motor.",
+    )
+    parser.add_argument(
+        "--pan-port-2",
+        default="C",
+        help="Build HAT port for second pan motor.",
+    )
+    parser.add_argument(
+        "--tilt-port",
+        default="A",
+        help="Build HAT port for tilt motor.",
+    )
+    parser.add_argument(
+        "--motor-speed",
+        type=int,
+        default=35,
+        help="Motor speed for manual key control (0-100).",
+    )
+    parser.add_argument(
+        "--pan-step-degrees",
+        type=int,
+        default=10,
+        help="Pan step size per key press in degrees.",
+    )
+    parser.add_argument(
+        "--tilt-step-degrees",
+        type=int,
+        default=8,
+        help="Tilt step size per key press in degrees.",
+    )
+    parser.add_argument(
+        "--pan-direction",
+        type=int,
+        choices=(-1, 1),
+        default=1,
+        help="Set to -1 if left/right are reversed.",
+    )
+    parser.add_argument(
+        "--tilt-direction",
+        type=int,
+        choices=(-1, 1),
+        default=-1,
+        help="Set to -1 or 1 to match your tilt direction.",
+    )
     return parser.parse_args()
+
+
+def handle_keypress(key: int, turret: ManualTurretController, args: argparse.Namespace) -> bool:
+    left_keys = {81, 2424832, 65361}
+    up_keys = {82, 2490368, 65362}
+    right_keys = {83, 2555904, 65363}
+    down_keys = {84, 2621440, 65364}
+
+    if key in left_keys:
+        turret.pan(-args.pan_direction * args.pan_step_degrees)
+        return True
+    if key in right_keys:
+        turret.pan(args.pan_direction * args.pan_step_degrees)
+        return True
+    if key in up_keys:
+        turret.tilt_move(args.tilt_direction * args.tilt_step_degrees)
+        return True
+    if key in down_keys:
+        turret.tilt_move(-args.tilt_direction * args.tilt_step_degrees)
+        return True
+    return False
 
 
 def main() -> None:
@@ -114,6 +203,18 @@ def main() -> None:
         sys.exit(1)
     print("[Camera] OK")
 
+    print("[Motors] Initialising manual control...")
+    turret = ManualTurretController(
+        pan_port_1=args.pan_port_1,
+        pan_port_2=args.pan_port_2,
+        tilt_port=args.tilt_port,
+        motor_speed=args.motor_speed,
+    )
+    print(
+        "[Motors] Ready "
+        f"(Pan={args.pan_port_1}+{args.pan_port_2}, Tilt={args.tilt_port}, Speed={args.motor_speed})"
+    )
+
     show_preview = not args.headless
     if show_preview and not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
         show_preview = False
@@ -126,7 +227,7 @@ def main() -> None:
     stream_thread.start()
 
     print(f"[Stream] http://0.0.0.0:{args.port}/")
-    print("[Info] Press q or ESC in preview window to quit.")
+    print("[Info] Arrow keys control turret in preview. Press q or ESC to quit.")
 
     prev_t = time.time()
     fps_ema = 0.0
@@ -151,6 +252,16 @@ def main() -> None:
                 2,
                 cv2.LINE_AA,
             )
+            cv2.putText(
+                frame,
+                "ARROWS: MOVE TURRET | Q/ESC: QUIT",
+                (10, 56),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (0, 220, 255),
+                2,
+                cv2.LINE_AA,
+            )
 
             ok_jpg, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
             if ok_jpg:
@@ -159,12 +270,14 @@ def main() -> None:
 
             if show_preview:
                 cv2.imshow("Camera Only", frame)
-                key = cv2.waitKey(1) & 0xFF
+                key = cv2.waitKeyEx(1)
+                handle_keypress(key, turret, args)
                 if key in (27, ord("q")):
                     break
     except KeyboardInterrupt:
         pass
     finally:
+        turret.stop()
         cap.release()
         cv2.destroyAllWindows()
 
