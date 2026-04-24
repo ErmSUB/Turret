@@ -22,12 +22,14 @@ import time
 
 import cv2
 from buildhat import Motor
-from flask import Flask, Response
+from flask import Flask, Response, request
 
 
 # Shared JPEG frame for MJPEG streaming
 _frame_lock = threading.Lock()
 _latest_jpeg: bytes | None = None
+_turret: ManualTurretController | None = None
+_control_args: argparse.Namespace | None = None
 
 app = Flask(__name__)
 
@@ -38,18 +40,22 @@ class ManualTurretController:
         self.pan_2 = Motor(pan_port_2)
         self.tilt = Motor(tilt_port)
         self.motor_speed = motor_speed
+        self._lock = threading.Lock()
 
     def pan(self, degrees: int) -> None:
-        self.pan_1.run_for_degrees(degrees, speed=self.motor_speed, blocking=False)
-        self.pan_2.run_for_degrees(degrees, speed=self.motor_speed, blocking=False)
+        with self._lock:
+            self.pan_1.run_for_degrees(degrees, speed=self.motor_speed, blocking=False)
+            self.pan_2.run_for_degrees(degrees, speed=self.motor_speed, blocking=False)
 
     def tilt_move(self, degrees: int) -> None:
-        self.tilt.run_for_degrees(degrees, speed=self.motor_speed, blocking=False)
+        with self._lock:
+            self.tilt.run_for_degrees(degrees, speed=self.motor_speed, blocking=False)
 
     def stop(self) -> None:
-        self.pan_1.stop()
-        self.pan_2.stop()
-        self.tilt.stop()
+        with self._lock:
+            self.pan_1.stop()
+            self.pan_2.stop()
+            self.tilt.stop()
 
 
 def find_usb_camera() -> int:
@@ -79,10 +85,87 @@ def video() -> Response:
 @app.route("/")
 def index() -> str:
     return (
-        "<html><body style='margin:0;background:#000'>"
-        "<img src='/video' style='width:100%;height:100vh;object-fit:contain'>"
-        "</body></html>"
+        "<!doctype html>"
+        "<html><head><meta charset='utf-8'><title>Camera Control</title>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<style>"
+        "body{margin:0;background:#070a12;color:#dbe8ff;font-family:Segoe UI,Tahoma,sans-serif;}"
+        ".wrap{display:grid;grid-template-rows:1fr auto;min-height:100vh;}"
+        ".feed{display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at 20% 10%,#1c2948 0,#070a12 55%);}"
+        "img{width:100%;height:100%;object-fit:contain;}"
+        ".panel{padding:12px 14px 16px;background:#10192b;border-top:1px solid #223558;}"
+        ".title{font-weight:700;margin-bottom:8px;}"
+        ".hint{opacity:.86;margin-bottom:10px;font-size:14px;}"
+        ".pad{display:grid;grid-template-columns:56px 56px 56px;grid-template-rows:56px 56px 56px;gap:8px;justify-content:center;}"
+        "button{border:none;border-radius:10px;background:#1f3357;color:#e8f2ff;font-size:22px;font-weight:700;}"
+        "button:active{background:#2b4a7f;}"
+        "#status{margin-top:8px;font-size:13px;opacity:.9;text-align:center;}"
+        "</style></head><body>"
+        "<div class='wrap'>"
+        "<div class='feed'><img src='/video' alt='Camera feed'></div>"
+        "<div class='panel'>"
+        "<div class='title'>Turret Control</div>"
+        "<div class='hint'>Use arrow keys while this page is focused, or tap the buttons.</div>"
+        "<div class='pad'>"
+        "<div></div><button data-dir='up' aria-label='Up'>▲</button><div></div>"
+        "<button data-dir='left' aria-label='Left'>◀</button><div></div><button data-dir='right' aria-label='Right'>▶</button>"
+        "<div></div><button data-dir='down' aria-label='Down'>▼</button><div></div>"
+        "</div>"
+        "<div id='status'>Ready</div>"
+        "</div></div>"
+        "<script>"
+        "const statusEl=document.getElementById('status');"
+        "const keyMap={ArrowLeft:'left',ArrowRight:'right',ArrowUp:'up',ArrowDown:'down'};"
+        "let lastSend=0;"
+        "function setStatus(msg){statusEl.textContent=msg;}"
+        "function send(dir){"
+        "  const now=Date.now();"
+        "  if(now-lastSend<70){return;}"
+        "  lastSend=now;"
+        "  fetch('/control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({direction:dir})})"
+        "    .then(r=>{if(!r.ok){throw new Error('control failed');} setStatus('Sent: '+dir);})"
+        "    .catch(()=>setStatus('Control request failed'));"
+        "}"
+        "window.addEventListener('keydown',e=>{"
+        "  const dir=keyMap[e.key];"
+        "  if(!dir){return;}"
+        "  e.preventDefault();"
+        "  send(dir);"
+        "});"
+        "document.querySelectorAll('button[data-dir]').forEach(btn=>{"
+        "  btn.addEventListener('click',()=>send(btn.dataset.dir));"
+        "});"
+        "window.addEventListener('focus',()=>setStatus('Page focused - arrows active'));"
+        "window.addEventListener('blur',()=>setStatus('Page not focused'))"
+        "</script></body></html>"
     )
+
+
+def apply_direction(direction: str, turret: ManualTurretController, args: argparse.Namespace) -> bool:
+    if direction == "left":
+        turret.pan(-args.pan_direction * args.pan_step_degrees)
+        return True
+    if direction == "right":
+        turret.pan(args.pan_direction * args.pan_step_degrees)
+        return True
+    if direction == "up":
+        turret.tilt_move(args.tilt_direction * args.tilt_step_degrees)
+        return True
+    if direction == "down":
+        turret.tilt_move(-args.tilt_direction * args.tilt_step_degrees)
+        return True
+    return False
+
+
+@app.route("/control", methods=["POST"])
+def control() -> tuple[str, int]:
+    if _turret is None or _control_args is None:
+        return ("Controller not ready", 503)
+    payload = request.get_json(silent=True) or {}
+    direction = str(payload.get("direction", "")).lower()
+    if not apply_direction(direction, _turret, _control_args):
+        return ("Invalid direction", 400)
+    return ("", 204)
 
 
 def parse_args() -> argparse.Namespace:
@@ -173,22 +256,18 @@ def handle_keypress(key: int, turret: ManualTurretController, args: argparse.Nam
     down_keys = {84, 2621440, 65364}
 
     if key in left_keys:
-        turret.pan(-args.pan_direction * args.pan_step_degrees)
-        return True
+        return apply_direction("left", turret, args)
     if key in right_keys:
-        turret.pan(args.pan_direction * args.pan_step_degrees)
-        return True
+        return apply_direction("right", turret, args)
     if key in up_keys:
-        turret.tilt_move(args.tilt_direction * args.tilt_step_degrees)
-        return True
+        return apply_direction("up", turret, args)
     if key in down_keys:
-        turret.tilt_move(-args.tilt_direction * args.tilt_step_degrees)
-        return True
+        return apply_direction("down", turret, args)
     return False
 
 
 def main() -> None:
-    global _latest_jpeg
+    global _latest_jpeg, _turret, _control_args
 
     args = parse_args()
 
@@ -210,6 +289,8 @@ def main() -> None:
         tilt_port=args.tilt_port,
         motor_speed=args.motor_speed,
     )
+    _turret = turret
+    _control_args = args
     print(
         "[Motors] Ready "
         f"(Pan={args.pan_port_1}+{args.pan_port_2}, Tilt={args.tilt_port}, Speed={args.motor_speed})"
@@ -227,7 +308,8 @@ def main() -> None:
     stream_thread.start()
 
     print(f"[Stream] http://0.0.0.0:{args.port}/")
-    print("[Info] Arrow keys control turret in preview. Press q or ESC to quit.")
+    print("[Info] Arrow keys work in preview window and in browser stream page.")
+    print("[Info] Press q or ESC in preview window to quit.")
 
     prev_t = time.time()
     fps_ema = 0.0
