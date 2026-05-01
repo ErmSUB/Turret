@@ -44,12 +44,12 @@ class ManualTurretController:
 
     def pan(self, degrees: int) -> None:
         with self._lock:
-            self.pan_1.run_for_degrees(degrees, speed=self.motor_speed, blocking=False)
-            self.pan_2.run_for_degrees(degrees, speed=self.motor_speed, blocking=False)
+            self.pan_1.run_for_degrees(2*degrees, speed=self.motor_speed, blocking=False)
+            self.pan_2.run_for_degrees(2*degrees, speed=self.motor_speed, blocking=False)
 
     def tilt_move(self, degrees: int) -> None:
         with self._lock:
-            self.tilt.run_for_degrees(degrees, speed=self.motor_speed, blocking=False)
+            self.tilt.run_for_degrees(-degrees, speed=self.motor_speed, blocking=False)
 
     def stop(self) -> None:
         with self._lock:
@@ -217,19 +217,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--motor-speed",
         type=int,
-        default=35,
+        default=100,
         help="Motor speed for manual key control (0-100).",
     )
     parser.add_argument(
         "--pan-step-degrees",
         type=int,
-        default=10,
+        default=20,
         help="Pan step size per key press in degrees.",
     )
     parser.add_argument(
         "--tilt-step-degrees",
         type=int,
-        default=8,
+        default=30,
         help="Tilt step size per key press in degrees.",
     )
     parser.add_argument(
@@ -243,7 +243,7 @@ def parse_args() -> argparse.Namespace:
         "--tilt-direction",
         type=int,
         choices=(-1, 1),
-        default=-1,
+        default=1,
         help="Set to -1 or 1 to match your tilt direction.",
     )
     return parser.parse_args()
