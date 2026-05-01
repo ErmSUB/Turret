@@ -44,12 +44,12 @@ class ManualTurretController:
 
     def pan(self, degrees: int) -> None:
         with self._lock:
-            self.pan_1.run_for_degrees(2*degrees, speed=self.motor_speed, blocking=False)
-            self.pan_2.run_for_degrees(2*degrees, speed=self.motor_speed, blocking=False)
+            self.pan_1.run_for_degrees(degrees, speed=self.motor_speed, blocking=False)
+            self.pan_2.run_for_degrees(degrees, speed=self.motor_speed, blocking=False)
 
     def tilt_move(self, degrees: int) -> None:
         with self._lock:
-            self.tilt.run_for_degrees(-degrees, speed=self.motor_speed, blocking=False)
+            self.tilt.run_for_degrees(degrees, speed=self.motor_speed, blocking=False)
 
     def stop(self) -> None:
         with self._lock:
@@ -223,13 +223,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--pan-step-degrees",
         type=int,
-        default=20,
+        default=30,
         help="Pan step size per key press in degrees.",
     )
     parser.add_argument(
         "--tilt-step-degrees",
         type=int,
-        default=30,
+        default=60,
         help="Tilt step size per key press in degrees.",
     )
     parser.add_argument(
