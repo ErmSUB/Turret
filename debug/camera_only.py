@@ -229,7 +229,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--tilt-step-degrees",
         type=int,
-        default=60,
+        default=30,
         help="Tilt step size per key press in degrees.",
     )
     parser.add_argument(
