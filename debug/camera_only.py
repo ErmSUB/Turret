@@ -35,10 +35,18 @@ app = Flask(__name__)
 
 
 class ManualTurretController:
-    def __init__(self, pan_port_1: str, pan_port_2: str, tilt_port: str, motor_speed: int) -> None:
+    def __init__(
+        self,
+        pan_port_1: str,
+        pan_port_2: str,
+        tilt_port: str,
+        shoot_port: str,
+        motor_speed: int,
+    ) -> None:
         self.pan_1 = Motor(pan_port_1)
         self.pan_2 = Motor(pan_port_2)
         self.tilt = Motor(tilt_port)
+        self.shoot = Motor(shoot_port)
         self.motor_speed = motor_speed
         self._lock = threading.Lock()
 
@@ -56,6 +64,11 @@ class ManualTurretController:
             self.pan_1.stop()
             self.pan_2.stop()
             self.tilt.stop()
+            self.shoot.stop()
+
+    def shoot_rotation(self, degrees: int) -> None:
+        with self._lock:
+            self.shoot.run_for_degrees(degrees, speed=self.motor_speed, blocking=False)
 
 
 def find_usb_camera() -> int:
@@ -105,11 +118,16 @@ def index() -> str:
         "<div class='feed'><img src='/video' alt='Camera feed'></div>"
         "<div class='panel'>"
         "<div class='title'>Turret Control</div>"
-        "<div class='hint'>Use arrow keys while this page is focused, or tap the buttons.</div>"
+        "<div class='hint'>Use arrow keys while this page is focused, press Q to shoot, or tap the buttons.</div>"
         "<div class='pad'>"
         "<div></div><button data-dir='up' aria-label='Up'>▲</button><div></div>"
         "<button data-dir='left' aria-label='Left'>◀</button><div></div><button data-dir='right' aria-label='Right'>▶</button>"
         "<div></div><button data-dir='down' aria-label='Down'>▼</button><div></div>"
+        "</div>"
+        "<div class='title' style='margin-top:12px;'>Shooter</div>"
+        "<div class='hint'>Runs one full rotation on the shoot motor.</div>"
+        "<div style='display:flex;justify-content:center;'>"
+        "<button id='shoot-btn' aria-label='Shoot once'>Shoot 1x</button>"
         "</div>"
         "<div id='status'>Ready</div>"
         "</div></div>"
@@ -127,6 +145,13 @@ def index() -> str:
         "    .catch(()=>setStatus('Control request failed'));"
         "}"
         "window.addEventListener('keydown',e=>{"
+        "  if(e.key==='q' || e.key==='Q'){"
+        "    e.preventDefault();"
+        "    fetch('/shoot',{method:'POST'})"
+        "      .then(r=>{if(!r.ok){throw new Error('shoot failed');} setStatus('Shoot: 1 rotation');})"
+        "      .catch(()=>setStatus('Shoot request failed'));"
+        "    return;"
+        "  }"
         "  const dir=keyMap[e.key];"
         "  if(!dir){return;}"
         "  e.preventDefault();"
@@ -134,6 +159,12 @@ def index() -> str:
         "});"
         "document.querySelectorAll('button[data-dir]').forEach(btn=>{"
         "  btn.addEventListener('click',()=>send(btn.dataset.dir));"
+        "});"
+        "const shootBtn=document.getElementById('shoot-btn');"
+        "shootBtn.addEventListener('click',()=>{"
+        "  fetch('/shoot',{method:'POST'})"
+        "    .then(r=>{if(!r.ok){throw new Error('shoot failed');} setStatus('Shoot: 1 rotation');})"
+        "    .catch(()=>setStatus('Shoot request failed'));"
         "});"
         "window.addEventListener('focus',()=>setStatus('Page focused - arrows active'));"
         "window.addEventListener('blur',()=>setStatus('Page not focused'))"
@@ -165,6 +196,14 @@ def control() -> tuple[str, int]:
     direction = str(payload.get("direction", "")).lower()
     if not apply_direction(direction, _turret, _control_args):
         return ("Invalid direction", 400)
+    return ("", 204)
+
+
+@app.route("/shoot", methods=["POST"])
+def shoot() -> tuple[str, int]:
+    if _turret is None or _control_args is None:
+        return ("Controller not ready", 503)
+    _turret.shoot_rotation(_control_args.shoot_degrees)
     return ("", 204)
 
 
@@ -215,6 +254,11 @@ def parse_args() -> argparse.Namespace:
         help="Build HAT port for tilt motor.",
     )
     parser.add_argument(
+        "--shoot-port",
+        default="D",
+        help="Build HAT port for shoot motor.",
+    )
+    parser.add_argument(
         "--motor-speed",
         type=int,
         default=100,
@@ -223,7 +267,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--pan-step-degrees",
         type=int,
-        default=30,
+        default=50,
         help="Pan step size per key press in degrees.",
     )
     parser.add_argument(
@@ -231,6 +275,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=30,
         help="Tilt step size per key press in degrees.",
+    )
+    parser.add_argument(
+        "--shoot-degrees",
+        type=int,
+        default=360,
+        help="Shoot motor rotation in degrees per button press.",
     )
     parser.add_argument(
         "--pan-direction",
@@ -250,6 +300,9 @@ def parse_args() -> argparse.Namespace:
 
 
 def handle_keypress(key: int, turret: ManualTurretController, args: argparse.Namespace) -> bool:
+    if key in (ord("q"), ord("Q")):
+        turret.shoot_rotation(args.shoot_degrees)
+        return True
     left_keys = {81, 2424832, 65361}
     up_keys = {82, 2490368, 65362}
     right_keys = {83, 2555904, 65363}
@@ -287,13 +340,14 @@ def main() -> None:
         pan_port_1=args.pan_port_1,
         pan_port_2=args.pan_port_2,
         tilt_port=args.tilt_port,
+        shoot_port=args.shoot_port,
         motor_speed=args.motor_speed,
     )
     _turret = turret
     _control_args = args
     print(
         "[Motors] Ready "
-        f"(Pan={args.pan_port_1}+{args.pan_port_2}, Tilt={args.tilt_port}, Speed={args.motor_speed})"
+        f"(Pan={args.pan_port_1}+{args.pan_port_2}, Tilt={args.tilt_port}, Shoot={args.shoot_port}, Speed={args.motor_speed})"
     )
 
     show_preview = not args.headless
@@ -309,7 +363,7 @@ def main() -> None:
 
     print(f"[Stream] http://0.0.0.0:{args.port}/")
     print("[Info] Arrow keys work in preview window and in browser stream page.")
-    print("[Info] Press q or ESC in preview window to quit.")
+    print("[Info] Press Q to shoot, ESC to quit (preview window).")
 
     prev_t = time.time()
     fps_ema = 0.0
@@ -336,7 +390,7 @@ def main() -> None:
             )
             cv2.putText(
                 frame,
-                "ARROWS: MOVE TURRET | Q/ESC: QUIT",
+                "ARROWS: MOVE TURRET | Q: SHOOT | ESC: QUIT",
                 (10, 56),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.6,
@@ -354,7 +408,7 @@ def main() -> None:
                 cv2.imshow("Camera Only", frame)
                 key = cv2.waitKeyEx(1)
                 handle_keypress(key, turret, args)
-                if key in (27, ord("q")):
+                if key == 27:
                     break
     except KeyboardInterrupt:
         pass
